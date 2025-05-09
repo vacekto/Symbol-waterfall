@@ -19,7 +19,7 @@ const LIFETIME_FADE: i16 = -7;
 // probability of .0 to .1 that generator spawns in a column per step
 const GENERATOR_IN_COLUMN: (u16, u16) = (1, 50);
 const RUNE_COLOR_BASE: (u8, u8, u8) = (0, 255, 255);
-const RUNE_COLOR_GENERATOR: (u8, u8, u8) = (255, 0, 0);
+const RUNE_GENERATOR_COLOR: (u8, u8, u8) = (255, 0, 0);
 
 struct Characters(&'static str);
 
@@ -92,14 +92,15 @@ impl Waterfall {
     pub fn new() -> Result<Self> {
         let symbols = Characters(SYMBOLS);
         let grid = Grid::new(&symbols)?;
-        let mut writer = io::stdout();
-        writer.queue(cursor::Hide)?;
-        writer.queue(Clear(ClearType::All))?;
+        let mut stdout = io::stdout();
+
+        stdout.queue(cursor::Hide)?;
+        stdout.queue(Clear(ClearType::All))?;
 
         Ok(Waterfall {
             grid,
             generators: vec![],
-            writer,
+            writer: stdout,
             characters: symbols,
             base_color: RUNE_COLOR_BASE,
         })
@@ -147,21 +148,22 @@ impl Waterfall {
 
         let mut rng = rand::thread_rng();
 
-        for i in 0..self.grid.0[0].len() {
-            if rng.gen_range(0..GENERATOR_IN_COLUMN.1) <= GENERATOR_IN_COLUMN.0 {
-                self.generators.push((i, 0))
-            }
-        }
-
         for g in self.generators.iter_mut() {
             g.1 += 1;
             let new_rune = self.characters.create_random_rune(self.base_color);
             self.grid.set_rune(g.0, g.1, new_rune)?;
         }
+        for i in 0..self.grid.0[0].len() {
+            if rng.gen_range(0..GENERATOR_IN_COLUMN.1) <= GENERATOR_IN_COLUMN.0 {
+                self.generators.push((i, 0));
+                let new_rune = self.characters.create_random_rune(self.base_color);
+                self.grid.set_rune(i, 0, new_rune)?;
+            }
+        }
 
         for g in &self.generators {
             let rune = self.grid.get_rune(g.0, g.1)?;
-            rune.color = RUNE_COLOR_GENERATOR;
+            rune.color = RUNE_GENERATOR_COLOR;
         }
 
         for row in self.grid.0.iter_mut() {
