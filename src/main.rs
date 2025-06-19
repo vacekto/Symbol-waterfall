@@ -10,6 +10,6 @@ fn main() -> Result<()> {
         waterfall.step()?;
         waterfall.render()?;
 
-        thread::sleep(Duration::from_millis(70));
+        thread::sleep(Duration::from_millis(50));
     }
 }

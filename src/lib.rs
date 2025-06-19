@@ -1,4 +1,7 @@
-use std::io::{self, Stdout, Write};
+use std::{
+    io::{self, Stdout, Write},
+    ops::{Deref, DerefMut},
+};
 
 use anyhow::Result;
 use crossterm::{
@@ -13,14 +16,20 @@ use rand::Rng;
 
 const SYMBOLS: &str = "ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍｦｲｸｺｿﾁﾄﾉﾌﾔﾖﾙﾚﾛﾝ012345789Z:.\"=*+-<>¦╌ç";
 // range of how long it takes for a rune to start fading
-const LIFETIME: (u16, u16) = (4, 20);
-// how long it takes for a rune to fade, must be negative!
-const LIFETIME_FADE: i16 = -7;
+const RUNE_LIFETIME: (u8, u8) = (4, 20);
+// how long it takes for a rune to fade
+const RUNE_FADE_DURATION: u8 = 7;
 // probability of .0 to .1 that generator spawns in a column per step
-const GENERATOR_IN_COLUMN: (u16, u16) = (1, 50);
+const GENERATOR_IN_COLUMN: (u16, u16) = (1, 90);
 const RUNE_COLOR_BASE: (u8, u8, u8) = (0, 255, 255);
 const RUNE_GENERATOR_COLOR: (u8, u8, u8) = (255, 0, 0);
 
+#[derive(Clone)]
+struct Rune {
+    character: char,
+    lifetime: u8,
+    color: (u8, u8, u8),
+}
 struct Characters(&'static str);
 
 impl Characters {
@@ -36,7 +45,7 @@ impl Characters {
     fn create_rune(&self, character: char, color: (u8, u8, u8)) -> Rune {
         let mut rng = rand::thread_rng();
 
-        let lifetime = (rng.gen_range(LIFETIME.0..LIFETIME.1)) as i16;
+        let lifetime = rng.gen_range(RUNE_LIFETIME.0..RUNE_LIFETIME.1) + RUNE_FADE_DURATION;
         Rune {
             character,
             lifetime,
@@ -45,6 +54,20 @@ impl Characters {
     }
 }
 struct Grid(Vec<Vec<Rune>>);
+
+impl Deref for Grid {
+    type Target = Vec<Vec<Rune>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Grid {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 impl Grid {
     fn new(characters: &Characters) -> Result<Self> {
@@ -71,13 +94,6 @@ impl Grid {
             .get_mut(x)
             .expect("out of bounds y Grid index"))
     }
-}
-
-#[derive(Clone)]
-struct Rune {
-    character: char,
-    lifetime: i16,
-    color: (u8, u8, u8),
 }
 
 pub struct Waterfall<T: Write = Stdout> {
@@ -107,15 +123,21 @@ impl Waterfall {
     }
 
     pub fn render(&mut self) -> Result<()> {
-        for (y, row) in self.grid.0.iter().enumerate() {
+        for (y, row) in self.grid.iter().enumerate() {
             for (x, rune) in row.iter().enumerate() {
                 let new_color = match rune.lifetime {
-                    0.. => rune.color,
-                    ..LIFETIME_FADE => (0, 0, 0),
+                    RUNE_FADE_DURATION.. => rune.color,
+                    0 => (0, 0, 0),
                     v => (
-                        rune.color.0 - (rune.color.0 / -LIFETIME_FADE as u8) * v.abs() as u8,
-                        rune.color.1 - (rune.color.1 / -LIFETIME_FADE as u8) * v.abs() as u8,
-                        rune.color.2 - (rune.color.2 / -LIFETIME_FADE as u8) * v.abs() as u8,
+                        rune.color.0.saturating_sub(
+                            (rune.color.0 / RUNE_FADE_DURATION) * (RUNE_FADE_DURATION - v),
+                        ),
+                        rune.color.1.saturating_sub(
+                            (rune.color.1 / RUNE_FADE_DURATION) * (RUNE_FADE_DURATION - v),
+                        ),
+                        rune.color.2.saturating_sub(
+                            (rune.color.2 / RUNE_FADE_DURATION) * (RUNE_FADE_DURATION - v),
+                        ),
                     ),
                 };
 
@@ -144,7 +166,7 @@ impl Waterfall {
         }
 
         self.generators
-            .retain(|g: &(usize, usize)| self.grid.0.len() > (g.1 + 1).into());
+            .retain(|g: &(usize, usize)| self.grid.len() > (g.1 + 1).into());
 
         let mut rng = rand::thread_rng();
 
@@ -153,7 +175,7 @@ impl Waterfall {
             let new_rune = self.characters.create_random_rune(self.base_color);
             self.grid.set_rune(g.0, g.1, new_rune)?;
         }
-        for i in 0..self.grid.0[0].len() {
+        for i in 0..self.grid[0].len() {
             if rng.gen_range(0..GENERATOR_IN_COLUMN.1) <= GENERATOR_IN_COLUMN.0 {
                 self.generators.push((i, 0));
                 let new_rune = self.characters.create_random_rune(self.base_color);
@@ -161,17 +183,22 @@ impl Waterfall {
             }
         }
 
-        for g in &self.generators {
-            let rune = self.grid.get_rune(g.0, g.1)?;
-            rune.color = RUNE_GENERATOR_COLOR;
-        }
+        for row in self.grid.iter_mut() {
+            for rune in row.iter_mut() {
+                if RUNE_LIFETIME.1 + RUNE_FADE_DURATION > rune.lifetime {
+                    if rune.lifetime == 0 {
+                        rune.character = ' ';
+                        continue;
+                    }
 
-        for row in self.grid.0.iter_mut() {
-            for rune in row {
-                if LIFETIME.1 + LIFETIME_FADE.abs() as u16 > rune.lifetime.abs() as u16 {
                     rune.lifetime -= 1;
                 }
             }
+        }
+
+        for g in &self.generators {
+            let rune = self.grid.get_rune(g.0, g.1)?;
+            rune.color = RUNE_GENERATOR_COLOR;
         }
         Ok(())
     }
